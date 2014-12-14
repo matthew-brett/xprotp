@@ -122,7 +122,6 @@ def test_attributes():
                                 kwargs={}))))
 
 
-
 def test_keys_values():
     # Keys / values returns dict, with list as values
     assert_tokens(xpp.key_values,
@@ -591,9 +590,13 @@ def test_sample_file():
         contents = fobj.read()
     res = xpp.read_protocols(contents)
     assert_equal(len(res), 1)
-    for v in res[0].value:
+    protocol = res[0]
+    assert_equal(len(protocol.depenedencies), 0)
+    assert_equal(len(protocol.param_blocks), 1)
+    assert_equal(len(protocol.attrs), 3)
+    for v in protocol.param_blocks[0].value:
         if v.tag_name.startswith('Protocol'):
             break
-    proto_str = v.value.replace('""', '"')
+    proto_str = xpp.strip_twin_quote(v.value)
     res2 = xpp.read_protocols(proto_str)
     assert_equal(len(res2), 2)

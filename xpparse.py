@@ -126,19 +126,28 @@ param_block <<= (param_bool |
                  param_functor |
                  pipe_service)
 
-param_card_layout = make_named_block('paramcardlayout',
-                                     ZeroOrMore(attr))
+param_card_layout = make_named_block('paramcardlayout', ZeroOrMore(attr))
 dependency = make_args_block('dependency')
 
 xprotocol = (xprotocol_tag +
              LCURLY +
              attrs +
-             ZeroOrMore(param_block) +
-             ZeroOrMore(param_card_layout) +
-             ZeroOrMore(dependency) +
+             ZeroOrMore(Group(param_block))('param_blocks') +
+             ZeroOrMore(Group(param_card_layout))('card_layouts') +
+             ZeroOrMore(Group(dependency))('dependencies') +
              RCURLY +
-             Optional(ascconv_block))
+             Optional(ascconv_block)('ascconv'))
 xprotocols = OneOrMore(Group(xprotocol))
+
+
+dbl_quote_re = re.compile(r'(?<!")""(?!")')
+
+def strip_twin_quote(in_str):
+    """ Replaces two double quotes together with one double quote
+
+    Does so safely so that triple double quotes not touched.
+    """
+    return dbl_quote_re.sub('"', in_str)
 
 
 def read_protocols(in_str, parse_all=True):
