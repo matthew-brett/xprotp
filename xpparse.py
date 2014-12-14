@@ -39,11 +39,12 @@ float_num = _spa(Regex(
 true = _spa(Literal('"true"'), lambda s,l,t: [ True ])
 false = _spa(Literal('"false"'), lambda s,l,t: [ False ])
 bool_ = true | false
-value = Forward() # value can include key_value, so recursive
-key_value = Group(bare_tag + value)
-value <<= bool_ | float_num | int_num | quoted_multi | key_value
+simple_value = bool_ | float_num | int_num | quoted_multi
+key_values = Group(bare_tag + OneOrMore(simple_value))
+keys_values = Dict(ZeroOrMore(key_values))
+list_entries = Group(ZeroOrMore(simple_value))('args') + keys_values('kwargs')
 # Return list value as list
-list_value = LCURLY + Group(ZeroOrMore(value)) + RCURLY
+list_value = LCURLY + list_entries + RCURLY
 bool_attr = bare_tag + bool_
 float_attr = bare_tag + float_num
 int_attr = bare_tag + int_num
@@ -92,11 +93,19 @@ param_block <<= (param_bool |
                  param_string |
                  param_array |
                  param_map)
+
+
 # Fancy functor and service stuff
-list_entries = Group(ZeroOrMore(value))
-event = make_named_block("event", list_entries)
-method = make_named_block("method", list_entries)
-connection = make_named_block("connection", list_entries)
+def make_args_block(tag_type):
+    return (make_named_tag(tag_type) +
+            LCURLY +
+            list_entries +
+            RCURLY)
+
+
+event = make_args_block("event")
+method = make_args_block("method")
+connection = make_args_block("connection")
 class_ = dictOf(make_literal_tag('class'), quoted_oneline)
 emc = Each([Group(event)('event'),
             Group(method)('method'),
@@ -112,7 +121,7 @@ pipe_service = make_named_block('pipeservice',
 
 param_card_layout = make_named_block('paramcardlayout',
                                      ZeroOrMore(attr))
-dependency = make_named_block('dependency', list_entries)
+dependency = make_args_block('dependency')
 
 xprotocol = (xprotocol_tag +
              LCURLY +
@@ -125,11 +134,10 @@ xprotocol = (xprotocol_tag +
 if __name__ == '__main__':
     with open('xprotocol_sample.txt', 'rt') as fobj:
         contents = fobj.read()
-
     res = xprotocol.parseString(contents, True)
     extras = []
     for v in res.value:
         if not v.tag_name.startswith('Protocol'):
             continue
         proto_str = v.value.replace('""', '"')
-        extras.append(xprotocol.parseString(), True)
+        extras.append(xprotocol.parseString(proto_str), True)

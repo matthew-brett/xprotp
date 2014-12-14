@@ -3,7 +3,7 @@
 
 import xpparse as xpp
 
-from pyparsing import ParseException, Optional
+from pyparsing import ParseException, Optional, OneOrMore
 
 from nose.tools import (assert_true, assert_false, assert_equal,
                         assert_not_equal, assert_raises)
@@ -64,20 +64,19 @@ def test_attributes():
     # Bool returns True | False
     assert_tokens(xpp.bool_, ' "false" ', [False])
     assert_tokens(xpp.bool_, ' "true" ', [True])
-    # Key value returns list, with converted values
-    assert_tokens(xpp.key_value, '<thing> "true" ', [['thing', True]])
-    assert_tokens(xpp.key_value, '<other> "string" ', [['other', "string"]])
-    assert_tokens(xpp.key_value, '< some> 2.3 ', [['some', 2.3]])
-    # Lists can contain any of the above
+    # Keys / values returns dict, with converted values
+    assert_tokens(xpp.keys_values, '<thing> "true" ', {'thing': True})
+    assert_tokens(xpp.keys_values, '<other> "string" ', {'other': 'string'})
+    assert_tokens(xpp.keys_values, '< some> 2.3 2 ', {'some': [2.3, 2]})
+    # Lists can contain any simple value followed by keys / values
     assert_tokens(xpp.list_value,
                   '{ "false" "true" 1 "three" }',
-                  [[False, True, 1, "three"]])
-    assert_tokens(xpp.list_value,
-                  '{ "false" "true" 1 "three" }',
-                  [[False, True, 1, "three"]])
+                  dict(args=[False, True, 1, "three"],
+                       kwargs={}))
     assert_tokens(xpp.list_value,
                   '{ "false" "true" <here> "there" 3 10.4 }',
-                  [[False, True, ['here', 'there'], 3, 10.4]])
+                  dict(args=[False, True],
+                       kwargs=dict(here=['there', 3, 10.4])))
     # Attrs are tags followed by the various variable types
     assert_tokens(xpp.bool_attr, '<SomeName> "false" ', ['SomeName', False])
     assert_tokens(xpp.bool_attr, '<Name> "true" ', ['Name', True])
@@ -88,8 +87,8 @@ def test_attributes():
                   ['Label', 'Inline Composing'])
     assert_tokens(xpp.list_attr,
                   '<LimitRange> { "false" "true" "astring" 2.3 4 <hi> "ho"}',
-                  ['LimitRange',
-                   [False, True, "astring", 2.3, 4, ['hi', 'ho']]])
+                  ['LimitRange', # Tuple form of dict
+                   [False, True, 'astring', 2.3, 4], [['hi', 'ho']]])
     # attr is any attr
     assert_tokens(xpp.attr,
                   '<Label> "Inline Composing"',
@@ -99,17 +98,45 @@ def test_attributes():
                   [['name', 2]])
     assert_tokens(xpp.attr,
                   '<LimitRange> { "false" "true" "astring" 2.3 4 <hi> "ho"}',
-                  [['LimitRange',
-                   [False, True, "astring", 2.3, 4, ['hi', 'ho']]]])
+                  [['LimitRange', # Tuple form of dict
+                   [False, True, 'astring', 2.3, 4], [['hi', 'ho']]]])
     # A section is some attrs
     assert_tokens(xpp.attrs,
                   """<Label> "Inline Composing"
                   <Tooltip> "Invokes Inline Composing."
                   <LimitRange> { "false" "true" }""",
                   dict(attrs=
-                       dict([('Label', 'Inline Composing'),
-                             ('Tooltip', "Invokes Inline Composing."),
-                             ('LimitRange', [False, True])])))
+                       dict(Label='Inline Composing',
+                            Tooltip="Invokes Inline Composing.",
+                            LimitRange=dict(
+                                args=[False, True],
+                                kwargs={}))))
+
+
+
+def test_keys_values():
+    # Keys / values returns dict, with list as values
+    assert_tokens(xpp.key_values,
+                  '<thing> "true" "false"',
+                  [['thing', True, False]])
+    assert_tokens(xpp.keys_values,
+                  '<thing> "true" "false" <thung> 1',
+                  {'thing': [True, False], 'thung': 1})
+    assert_tokens(xpp.keys_values,
+                  '<thing> "true" <thung> 1 2 <thack> 1',
+                  {'thing': True, 'thung': [1, 2], 'thack': 1})
+
+
+def test_list_entries():
+    assert_tokens(xpp.list_entries,
+                  '"string1" "string2" '
+                  '<Param> "MultiStep.IsMultistep" '
+                  '<Pos> 110 3 <Repr> "UI_CHECKBOX"',
+                  dict(args=['string1', 'string2'],
+                       kwargs=dict(
+                           Param="MultiStep.IsMultistep",
+                           Pos=[110, 3],
+                           Repr="UI_CHECKBOX")))
 
 
 def test_param_tags():
@@ -138,7 +165,9 @@ def test_param_blocks():
                   """,
                   dict(tag_type='parambool',
                        tag_name='IsInlineComposed',
-                       attrs=dict(LimitRange=[False, True])))
+                       attrs=dict(LimitRange=dict(
+                           args=[False, True],
+                           kwargs={}))))
     assert_tokens(xpp.param_block,
                   """ <ParamLong."Count">
                   {
@@ -210,7 +239,9 @@ def test_param_map():
                        attrs={},
                        value=[dict(tag_type='parambool',
                                    tag_name='IsInlineComposed',
-                                   attrs=dict(LimitRange=[False, True])),
+                                   attrs=dict(LimitRange=dict(
+                                              args=[False, True],
+                                              kwargs={}))),
                               dict(tag_type='paramlong',
                                    tag_name='Count',
                                    attrs={},
@@ -223,12 +254,13 @@ def test_event():
                   '"class MrPtr<class MiniHeader,class Parc::Component> &" '
                   '"class ImageControl &" }',
                   dict(tag_type='event',
-                        tag_name='ImageReady',
-                        value = ["int32_t",
-                                 "class IceAs &",
-                                 "class MrPtr<class MiniHeader,"
-                                 "class Parc::Component> &",
-                                 "class ImageControl &"]))
+                       tag_name='ImageReady',
+                       args=["int32_t",
+                             "class IceAs &",
+                             "class MrPtr<class MiniHeader,"
+                             "class Parc::Component> &",
+                             "class ImageControl &"],
+                       kwargs={}))
 
 
 def test_method():
@@ -238,11 +270,13 @@ def test_method():
                   '"class ImageControl &"  }',
                   dict(tag_type='method',
                        tag_name='ComputeImage',
-                       value = ["int32_t",
+                       args = ["int32_t",
                                 "class IceAs &",
                                 "class MrPtr<class MiniHeader,"
                                 "class Parc::Component> &",
-                                "class ImageControl &"]))
+                                "class ImageControl &"],
+                       kwargs={}))
+
 
 
 def test_connection():
@@ -252,17 +286,19 @@ def test_connection():
                   '"DtiIcePostProcMosaicDecorator" '
                   '"ComputeImage"  }',
                   dict(tag_type='connection',
-                        tag_name='c1',
-                        value = ["ImageReady",
-                                 "DtiIcePostProcMosaicDecorator",
-                                 "ComputeImage"]))
+                       tag_name='c1',
+                       args=["ImageReady",
+                               "DtiIcePostProcMosaicDecorator",
+                               "ComputeImage"],
+                       kwargs={}))
     assert_tokens(xpp.connection,
                   '<Connection."c1">  { "ImageReady" "" "ComputeImage"  }',
                   dict(tag_type='connection',
                        tag_name='c1',
-                       value = ["ImageReady",
-                                "",
-                                "ComputeImage"]))
+                       args=["ImageReady",
+                             "",
+                             "ComputeImage"],
+                       kwargs={}))
 
 
 def test_class():
@@ -280,25 +316,28 @@ def test_emc():
                     {'event': dict(
                         tag_type='event',
                         tag_name='ImageReady',
-                        value = ["int32_t",
-                                 "class IceAs &",
-                                 "class MrPtr<class MiniHeader,"
-                                 "class Parc::Component> &",
-                                 "class ImageControl &"]),
+                        args=["int32_t",
+                              "class IceAs &",
+                              "class MrPtr<class MiniHeader,"
+                              "class Parc::Component> &",
+                              "class ImageControl &"],
+                        kwargs={}),
                     'method': dict(
                         tag_type='method',
                         tag_name='ComputeImage',
-                        value = ["int32_t",
-                                 "class IceAs &",
-                                 "class MrPtr<class MiniHeader,"
-                                 "class Parc::Component> &",
-                                 "class ImageControl &"]),
+                        args=["int32_t",
+                              "class IceAs &",
+                              "class MrPtr<class MiniHeader,"
+                              "class Parc::Component> &",
+                              "class ImageControl &"],
+                        kwargs={}),
                     'connection': dict(
                         tag_type='connection',
                         tag_name='c1',
-                        value = ["ImageReady",
-                                 "DtiIcePostProcMosaicDecorator",
-                                 "ComputeImage"])})
+                        args=["ImageReady",
+                              "DtiIcePostProcMosaicDecorator",
+                              "ComputeImage"],
+                        kwargs={})})
 
 
 def test_functor():
@@ -322,25 +361,28 @@ def test_functor():
                    'event': dict(
                        tag_type='event',
                        tag_name='ImageReady',
-                       value = ["int32_t",
-                                "class IceAs &",
-                                "class MrPtr<class MiniHeader,"
-                                "class Parc::Component> &",
-                                "class ImageControl &"]),
+                       args=["int32_t",
+                             "class IceAs &",
+                             "class MrPtr<class MiniHeader,"
+                             "class Parc::Component> &",
+                             "class ImageControl &"],
+                       kwargs={}),
                    'method': dict(
                        tag_type='method',
                        tag_name='ComputeImage',
-                       value = ["int32_t",
-                                "class IceAs &",
-                                "class MrPtr<class MiniHeader,"
-                                "class Parc::Component> &",
-                                "class ImageControl &"]),
+                       args=["int32_t",
+                             "class IceAs &",
+                             "class MrPtr<class MiniHeader,"
+                             "class Parc::Component> &",
+                             "class ImageControl &"],
+                       kwargs={}),
                    'connection': dict(
                        tag_type='connection',
                        tag_name='c1',
-                       value = ["ImageReady",
-                                "DtiIcePostProcMosaicDecorator",
-                                "ComputeImage"])})
+                       args=["ImageReady",
+                             "DtiIcePostProcMosaicDecorator",
+                             "ComputeImage"],
+                       kwargs={})})
 
 
 def test_pipe_service():
@@ -435,31 +477,47 @@ def test_dependency():
                   """,
                   dict(tag_type='dependency',
                        tag_name="MrMS_DH_TpPosMode",
-                       value=["MultiStep.TpPosMode",
-                              ['Dll', "MrMultiStepDependencies"],
-                              ['Context', "ONLINE"]]))
+                       args=["MultiStep.TpPosMode"],
+                       kwargs=dict(Dll="MrMultiStepDependencies",
+                                   Context="ONLINE")))
 
 
 def test_param_card_layout():
-    assert_tokens(xpp.param_card_layout,
-"""<ParamCardLayout."Multistep">
-  {
+    in_str = """<ParamCardLayout."Multistep">
+    {
     <Repr> "LAYOUT_10X2_WIDE_CONTROLS"
     <Control>  { <Param> "MultiStep.IsMultistep" <Pos> 110 3 <Repr> "UI_CHECKBOX" }
     <Control>  { <Param> "MultiStep.SubStep" <Pos> 77 18 }
     <Line>  { 126 3 126 33 }
     <Line>  { 276 48 276 140 }
-  }""",
+    }"""
+    assert_tokens(xpp.param_card_layout,
+                  in_str,
+                  # We can't use the nice dict representation for testing
+                  # because we are returning the attrs as lists (name, value).
+                  # Can still acces values this way though, e.g.
+                  # card_layout['value'][1]['args']['Param']
                   dict(tag_type='paramcardlayout',
                        tag_name="Multistep",
                        value=[['Repr', "LAYOUT_10X2_WIDE_CONTROLS"],
                               ['Control',
-                               [['Param', "MultiStep.IsMultistep"],
-                                'Pos', 110, 3, 'Repr', "UI_CHECKBOX"]],
+                               [], # args
+                               [['Param', "MultiStep.IsMultistep"], # kwargs
+                                ['Pos', 110, 3],
+                                ['Repr', "UI_CHECKBOX"]]],
                               ['Control',
-                               ['Param', "MultiStep.SubStep", 'Pos', 77, 18]],
-                              ['Line',  [ 126, 3, 126, 33 ]],
-                              ['Line',  [ 276, 48, 276, 140 ]]]))
+                               [], # args
+                               [['Param', "MultiStep.SubStep"], # kwargs
+                                ['Pos', 77, 18]]],
+                              ['Line',
+                               [126, 3, 126, 33],
+                               []],
+                              ['Line',
+                               [276, 48, 276, 140],
+                               []]]))
+    parsed = xpp.param_card_layout.parseString(in_str, True)
+    assert_equal(list(parsed['value'][1]['kwargs']['Pos']), [110, 3])
+    assert_equal(list(parsed.value[3]['args']), [126, 3, 126, 33])
 
 
 def test_eva_string_table():
@@ -472,7 +530,9 @@ def test_eva_string_table():
     447 "Adaptive"
   }""",
                   ['EVAStringTable',
-                   [34,
+                   [34,  # args
                     400, "Multistep Protocol",
                     401, "Step",
-                    447, "Adaptive"]])
+                    447, "Adaptive"],
+                   []  # kwargs
+                  ])
