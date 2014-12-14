@@ -1,11 +1,11 @@
 """ Pyparsing parser for Siemens xprotocol XML-like format
 """
-
-from collections import OrderedDict
+from __future__ import print_function
 
 from pyparsing import (Regex, Suppress, OneOrMore, ZeroOrMore, Group, Optional,
-                       Forward, SkipTo, CaselessLiteral, Dict, removeQuotes,
-                       Each, Word, alphanums, nums, dblQuotedString, Literal)
+                       Forward, CaselessLiteral, Dict, removeQuotes,
+                       Each, Word, alphanums, nums, dblQuotedString, Literal,
+                       dictOf)
 
 
 # Character literals
@@ -15,10 +15,14 @@ DOT = Suppress('.')
 LANGLE = Suppress('<')
 RANGLE = Suppress('>')
 
+def _spa(element, action):
+    """ Shortcut to set parse action """
+    return element.setParseAction(action)
+
+
 quoted_oneline = dblQuotedString
-quoted_multi = Regex(
-    r'"(?:[^"]|(?:"")|(?:\\x[0-9a-fA-F]+)|(?:\\.))*"').setName(
-        "string enclosed in double quotes").setParseAction(removeQuotes)
+quoted_multi = _spa(Regex(r'"(?:[^"]|(?:"")|(?:\\x[0-9a-fA-F]+)|(?:\\.))*"'),
+                    removeQuotes)
 ascconv_block = Regex(r'### ASCCONV BEGIN ###$(.*?)^### ASCCONV END ###')
 
 
@@ -28,72 +32,91 @@ def make_literal_tag(tag_name):
 
 xprotocol_tag = make_literal_tag('xprotocol')
 bare_tag = LANGLE + Word(alphanums) + RANGLE
-int_num = Word(nums).setParseAction( lambda s,l,t: [ int(t[0]) ] )
-float_num = Regex(
-    r'[+-]?(?=\d*[.eE])(?=\.?\d)\d*\.?\d*(?:[eE][+-]?\d+)?').setParseAction(
+int_num = _spa(Word(nums), lambda s,l,t: [ int(t[0]) ] )
+float_num = _spa(Regex(
+    r'[+-]?(?=\d*[.eE])(?=\.?\d)\d*\.?\d*(?:[eE][+-]?\d+)?'),
     lambda s,l,t: [ float(t[0]) ])
-true = Literal('"true"').setParseAction(lambda s,l,t: [ True ])
-false = Literal('"false"').setParseAction(lambda s,l,t: [ False ])
+true = _spa(Literal('"true"'), lambda s,l,t: [ True ])
+false = _spa(Literal('"false"'), lambda s,l,t: [ False ])
 bool_ = true | false
 value = Forward() # value can include key_value, so recursive
-key_value = (bare_tag + value).setParseAction(
-    lambda s,l,t: [(t[0], t[1])])
+key_value = Group(bare_tag + value)
 value <<= bool_ | float_num | int_num | quoted_multi | key_value
 # Return list value as list
-list_value = (LCURLY + ZeroOrMore(value) + RCURLY).setParseAction(
-    lambda s,l,t: [[v for v in t]])
+list_value = LCURLY + Group(ZeroOrMore(value)) + RCURLY
 bool_attr = bare_tag + bool_
 float_attr = bare_tag + float_num
 int_attr = bare_tag + int_num
 string_attr = bare_tag + quoted_multi
 list_attr = bare_tag + list_value
-attrs = bool_attr | float_attr | int_attr | string_attr | list_attr
-# Return attr_section as OrderedDict
-attr_section = ZeroOrMore(attrs).setParseAction(
-    lambda s,l,t: OrderedDict(t))
+attr = Group(bool_attr | float_attr | int_attr | string_attr | list_attr)
+attrs = Dict(ZeroOrMore(attr))('attrs')
 
 
 def make_named_tag(tag_type):
     return (LANGLE +
-            CaselessLiteral(tag_type) +
+            CaselessLiteral(tag_type)('tag_type') +
             DOT +
-            quoted_oneline.setName('tag_name') +
+            _spa(quoted_oneline, removeQuotes)('tag_name') +
             RANGLE)
 
 
-def make_named_block(tag_type, contents):
-    return (make_named_tag(tag_type) + LCURLY + contents + RCURLY)
+def make_named_block(tag_type, contents=None, pre=None, post=None):
+    definition = make_named_tag(tag_type) + LCURLY
+    if pre is not None:
+        definition = definition + pre
+    definition = definition + contents('value')
+    if post is not None:
+        definition = definition + post
+    return definition + RCURLY
 
 
 def make_param_block(tag_type, contents):
-    return make_named_block(tag_type, attr_section + Optional(contents))
+    return make_named_block(tag_type, pre=attrs, contents=contents)
 
 
-param_bool = make_param_block('parambool', bool_)
-param_long = make_param_block('paramlong', int_num)
-param_array = make_param_block('paramarray', list_value)
-# Recursive definition of blocks, can includ param_map
+param_bool = make_param_block('parambool', Optional(bool_))
+param_long = make_param_block('paramlong', Optional(int_num))
+param_string = make_param_block('paramstring', Optional(quoted_multi))
+# Recursive definition of blocks, can include param_map
 param_block = Forward()
-param_map = make_param_block('parammap', param_block)
+array_default = dictOf(make_literal_tag('default'), param_block)
+param_array = make_named_block('paramarray',
+                               pre=attrs + array_default,
+                               contents=_spa(Optional(list_value),
+                                             lambda s, l, t: [t[0]]))
+param_map = make_param_block('parammap', ZeroOrMore(Group(param_block)))
 # Now we can define block with param_map definition
-param_block <<= (param_bool | param_long | param_array | param_map)
+param_block <<= (param_bool |
+                 param_long |
+                 param_string |
+                 param_array |
+                 param_map)
 # Fancy functor and service stuff
-event = make_named_block("event", list_value)
-method = make_named_block("method", list_value)
-connection = make_named_block("connection", list_value)
+list_entries = Group(ZeroOrMore(value))
+event = make_named_block("event", list_entries)
+method = make_named_block("method", list_entries)
+connection = make_named_block("connection", list_entries)
+class_ = dictOf(make_literal_tag('class'), quoted_oneline)
+emc = Each([Group(event)('event'),
+            Group(method)('method'),
+            Group(connection)('connection')])
 param_functor = make_named_block('paramfunctor',
-                            make_literal_tag('class') +
-                            ZeroOrMore(param_block) +
-                            Each([event, method, connection]))
+                                 pre=class_,
+                                 contents=ZeroOrMore(Group(param_block)),
+                                 post=emc)
 pipe_service = make_named_block('pipeservice',
-                                make_literal_tag('class') +
-                                OneOrMore(param_block | param_functor))
-param_card_layout = make_named_block('paramcardlayout', attr_section)
-dependency = make_named_block('dependency', list_value)
+                                pre=class_,
+                                contents=OneOrMore(Group(
+                                    param_block | param_functor)))
+
+param_card_layout = make_named_block('paramcardlayout',
+                                     ZeroOrMore(attr))
+dependency = make_named_block('dependency', list_entries)
 
 xprotocol = (xprotocol_tag +
              LCURLY +
-             attr_section +
+             attrs +
              ZeroOrMore(param_block) +
              RCURLY +
              Optional(ascconv_block))
@@ -103,4 +126,10 @@ if __name__ == '__main__':
     with open('xprotocol_sample.txt', 'rt') as fobj:
         contents = fobj.read()
 
-    res = xprotocol.parseString(contents)
+    res = xprotocol.parseString(contents, True)
+    extras = []
+    for v in res.value:
+        if not v.tag_name.startswith('Protocol'):
+            continue
+        proto_str = v.value.replace('""', '"')
+        extras.append(xprotocol.parseString(), True)
