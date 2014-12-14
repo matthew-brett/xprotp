@@ -1,12 +1,18 @@
 """ Test module to parse xprotocl text
 """
 
+from os.path import join as pjoin, dirname
+
 import xpparse as xpp
 
-from pyparsing import ParseException, Optional, OneOrMore
+from pyparsing import ParseException
 
 from nose.tools import (assert_true, assert_false, assert_equal,
                         assert_not_equal, assert_raises)
+
+
+DATA_PATH = dirname(__file__)
+EG_PROTO = pjoin(DATA_PATH, 'xprotocol_sample.txt')
 
 
 def to_comparable(parse_results, expected):
@@ -30,7 +36,7 @@ def assert_tokens(pattern, source, expected):
         expected)
 
 
-def test_xprotocol():
+def test_xprotocol_tag():
     assert_tokens(xpp.xprotocol_tag, '<xprotocol>', ['xprotocol'])
     assert_tokens(xpp.xprotocol_tag, '<   xprotocol >', ['xprotocol'])
     assert_tokens(xpp.xprotocol_tag, '<   xProtoCol >', ['xprotocol'])
@@ -54,6 +60,9 @@ def test_attributes():
     assert_tokens(xpp.int_attr,
                   '<ID> 1000002 ',
                   ['ID', 1000002])
+    assert_tokens(xpp.int_attr,
+                  '<Default> -1',
+                  ['Default', -1])
     # Float returns float
     assert_tokens(xpp.float_attr,
                   '<Userversion> 2.0 ',
@@ -246,6 +255,27 @@ def test_param_map():
                                    tag_name='Count',
                                    attrs={},
                                    value=1)]))
+
+def test_param_choice():
+    assert_tokens(xpp.param_choice,
+                  """
+      <ParamChoice."ComposingFunction">
+      {
+        <Label> "Composing Function"
+        <Tooltip> "Defines the composing algorithm to be used."
+        <Default> "Angio"
+        <Limit> { "Angio" "Spine" "Adaptive" }
+      }""",
+                  dict(tag_type='paramchoice',
+                       tag_name='ComposingFunction',
+                       attrs=dict(
+                           Label='Composing Function',
+                           Tooltip=('Defines the composing algorithm '
+                                    'to be used.'),
+                           Default='Angio',
+                           Limit=dict(
+                               args=['Angio', 'Spine', 'Adaptive'],
+                               kwargs={}))))
 
 
 def test_event():
@@ -536,3 +566,34 @@ def test_eva_string_table():
                     447, "Adaptive"],
                    []  # kwargs
                   ])
+
+
+def test_ascconv_block():
+    assert_tokens(xpp.ascconv_block,
+"""
+### ASCCONV BEGIN ###
+ulVersion                                = 0x14b44b6
+tSequenceFileName                        = "%SiemensSeq%\ep2d_diff"
+WaitForUserStart                         = 0x1
+ucAutoAlignInit                          = 0x1
+### ASCCONV END ### """,
+                  [
+"""### ASCCONV BEGIN ###
+ulVersion                                = 0x14b44b6
+tSequenceFileName                        = "%SiemensSeq%\ep2d_diff"
+WaitForUserStart                         = 0x1
+ucAutoAlignInit                          = 0x1
+### ASCCONV END ###"""])
+
+
+def test_sample_file():
+    with open(EG_PROTO, 'rt') as fobj:
+        contents = fobj.read()
+    res = xpp.read_protocols(contents)
+    assert_equal(len(res), 1)
+    for v in res[0].value:
+        if v.tag_name.startswith('Protocol'):
+            break
+    proto_str = v.value.replace('""', '"')
+    res2 = xpp.read_protocols(proto_str)
+    assert_equal(len(res2), 2)

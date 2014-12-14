@@ -2,9 +2,11 @@
 """
 from __future__ import print_function
 
+import re
+
 from pyparsing import (Regex, Suppress, OneOrMore, ZeroOrMore, Group, Optional,
                        Forward, CaselessLiteral, Dict, removeQuotes,
-                       Each, Word, alphanums, nums, dblQuotedString, Literal,
+                       Each, Word, alphanums, dblQuotedString, Literal,
                        dictOf)
 
 
@@ -23,7 +25,8 @@ def _spa(element, action):
 quoted_oneline = dblQuotedString
 quoted_multi = _spa(Regex(r'"(?:[^"]|(?:"")|(?:\\x[0-9a-fA-F]+)|(?:\\.))*"'),
                     removeQuotes)
-ascconv_block = Regex(r'### ASCCONV BEGIN ###$(.*?)^### ASCCONV END ###')
+ascconv_block = Regex(r'### ASCCONV BEGIN ###$(.*?)^### ASCCONV END ###',
+                      flags=re.M | re.S)
 
 
 def make_literal_tag(tag_name):
@@ -32,7 +35,7 @@ def make_literal_tag(tag_name):
 
 xprotocol_tag = make_literal_tag('xprotocol')
 bare_tag = LANGLE + Word(alphanums) + RANGLE
-int_num = _spa(Word(nums), lambda s,l,t: [ int(t[0]) ] )
+int_num = _spa(Regex(r'[-]?[0-9]+'), lambda s,l,t: [ int(t[0]) ] )
 float_num = _spa(Regex(
     r'[+-]?(?=\d*[.eE])(?=\.?\d)\d*\.?\d*(?:[eE][+-]?\d+)?'),
     lambda s,l,t: [ float(t[0]) ])
@@ -86,14 +89,9 @@ param_array = make_named_block('paramarray',
                                pre=attrs + array_default,
                                contents=_spa(Optional(list_value),
                                              lambda s, l, t: [t[0]]))
+# Not sure what value type should be for paramchoice
+param_choice = make_param_block('paramchoice', Optional(quoted_multi))
 param_map = make_param_block('parammap', ZeroOrMore(Group(param_block)))
-# Now we can define block with param_map definition
-param_block <<= (param_bool |
-                 param_long |
-                 param_string |
-                 param_array |
-                 param_map)
-
 
 # Fancy functor and service stuff
 def make_args_block(tag_type):
@@ -116,8 +114,17 @@ param_functor = make_named_block('paramfunctor',
                                  post=emc)
 pipe_service = make_named_block('pipeservice',
                                 pre=class_,
-                                contents=OneOrMore(Group(
-                                    param_block | param_functor)))
+                                contents=OneOrMore(Group(param_block)))
+
+# Now we can define block with param_map, functor, pipe_service definition
+param_block <<= (param_bool |
+                 param_long |
+                 param_string |
+                 param_choice |
+                 param_array |
+                 param_map |
+                 param_functor |
+                 pipe_service)
 
 param_card_layout = make_named_block('paramcardlayout',
                                      ZeroOrMore(attr))
@@ -127,17 +134,12 @@ xprotocol = (xprotocol_tag +
              LCURLY +
              attrs +
              ZeroOrMore(param_block) +
+             ZeroOrMore(param_card_layout) +
+             ZeroOrMore(dependency) +
              RCURLY +
              Optional(ascconv_block))
+xprotocols = OneOrMore(Group(xprotocol))
 
 
-if __name__ == '__main__':
-    with open('xprotocol_sample.txt', 'rt') as fobj:
-        contents = fobj.read()
-    res = xprotocol.parseString(contents, True)
-    extras = []
-    for v in res.value:
-        if not v.tag_name.startswith('Protocol'):
-            continue
-        proto_str = v.value.replace('""', '"')
-        extras.append(xprotocol.parseString(proto_str), True)
+def read_protocols(in_str, parse_all=True):
+    return xprotocols.parseString(in_str, parse_all)
